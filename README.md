@@ -1,49 +1,45 @@
 # Engineering Journal
 
-This repository is a technical journal documenting labs, troubleshooting exercises, experiments, and lessons learned while studying Information Technology and working in cybersecurity and system administration.
+Short, human description of what this repo is:
+learning notes, after-action reports, writeups, and references I want to keep.
 
-Rather than polished tutorials, these notes capture the real engineering process:
+## What this is
 
-- testing ideas
-- breaking things
-- troubleshooting
-- documenting root causes
-- recording lessons learned
+- A running record of things I’m learning
+- After-action reports for projects, labs, and incidents
+- Notes I wish I had before I started
 
-The goal is to create a searchable knowledge base and a public record of continuous learning.
+## How to use this repo
 
----
+- Start here: `docs/index.md`
+- After Action Reports: `docs/after-action-reports/`
+- About (resume/certs): `docs/about/`
 
-## Topics Covered
+## Recent entries
 
-- Networking
-- System Administration
-- Cybersecurity
-- Home Lab Experiments
-- Automation and Scripts
-- After Action Reports
+- YYYY-MM-DD — [Title](docs/after-action-reports/yyyy-mm-dd-title.md)
+- YYYY-MM-DD — [Title](docs/notes/yyyy-mm-dd-topic.md)
+- YYYY-MM-DD — [Title](docs/learning/yyyy-mm-dd-thing.md)
 
----
+## Repo conventions
 
-## Repository Structure
+### Writing style
 
-after-action-reports/ – lessons learned and troubleshooting summaries
-labs/ – coursework labs and experiments
-networking/ – networking concepts and notes
-cybersecurity/ – security concepts and investigations
-system-administration/ – OS management and configuration
-diagrams/ – architecture diagrams
-scripts/ – helper scripts and automation
+- Keep it practical and specific.
+- Prefer screenshots/commands over vibes.
+- Call out what you’d do differently next time.
 
----
+### Naming
 
-## Writing Philosophy
+- Dates first for sorting: `yyyy-mm-dd-title.md`
+- Use kebab-case for filenames.
 
-These notes follow a few principles:
+### Commit convention (suggested)
 
-1. Document what actually happened.
-2. Capture root cause and resolution.
-3. Record lessons learned.
-4. Keep entries concise and practical.
+- `journal: <title>` for entries
+- `docs: <change>` for docs/structure changes
+- `chore: <change>` for tooling/config
 
-This repository acts as both a personal knowledge base and a professional engineering log.
+## License
+
+Pick what you want here (MIT is common). If unsure, leave this section out for now.
