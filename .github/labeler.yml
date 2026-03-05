@@ -1,0 +1,44 @@
+aar:
+  - changed-files:
+      - any-glob-to-any-file: "docs/after-action-reports/**"
+
+lab:
+  - changed-files:
+      - any-glob-to-any-file: "docs/labs/**"
+
+net:
+  - changed-files:
+      - any-glob-to-any-file: "docs/networking/**"
+
+sec:
+  - changed-files:
+      - any-glob-to-any-file: "docs/cybersecurity/**"
+
+sys:
+  - changed-files:
+      - any-glob-to-any-file: "docs/system-administration/**"
+
+site:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "mkdocs.yml"
+          - "docs/tags.md"
+          - "docs/index.md"
+          - ".github/workflows/pages.yml"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ".github/workflows/**"
+
+gov:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/prompts/**"
+          - ".github/PULL_REQUEST_TEMPLATE*"
+          - ".github/ISSUE_TEMPLATE/**"
+          - ".github/labeler.yml"
+          - ".markdownlint.json"
+          - ".markdownlintignore"
+          - ".pre-commit-config.yaml"
+          - ".github/actions/**"
+          - "scripts/**"

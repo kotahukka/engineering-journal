@@ -1,0 +1,34 @@
+name: Journal Note
+description: A general entry (net/sec/sys/etc.)
+title: "docs: "
+labels: ["docs"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - aar
+        - lab
+        - net
+        - sec
+        - sys
+        - site
+        - ci
+        - chore
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What will be written/added?
+    validations:
+      required: true
+  - type: textarea
+    id: tags
+    attributes:
+      label: Tags (MkDocs)
+      description: e.g. networking, arp, troubleshooting
+    validations:
+      required: false

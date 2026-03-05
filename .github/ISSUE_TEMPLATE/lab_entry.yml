@@ -1,0 +1,30 @@
+name: Lab Entry
+description: Track a lab write-up to publish into docs
+title: "lab: "
+labels: ["lab"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: Bullet list is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / screenshots / results
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / what I learned
+    validations:
+      required: true

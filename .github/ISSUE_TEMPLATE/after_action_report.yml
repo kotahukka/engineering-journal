@@ -1,0 +1,43 @@
+name: After Action Report
+description: Write an AAR entry (root cause, resolution, lessons learned)
+title: "aar: "
+labels: ["aar"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What were you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, tooling, network, versions, etc.
+    validations:
+      required: false
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: root_cause
+    attributes:
+      label: Root cause
+    validations:
+      required: true
+  - type: textarea
+    id: resolution
+    attributes:
+      label: Resolution
+    validations:
+      required: true
+  - type: textarea
+    id: lessons
+    attributes:
+      label: Lessons learned / follow-ups
+    validations:
+      required: true

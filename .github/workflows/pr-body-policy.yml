@@ -1,0 +1,20 @@
+name: PR Body Policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR body includes Closes # and one category checkbox
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "$BODY" | grep -Eiq '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#([0-9]+)' \
+            || (echo "PR body must include: Closes #123" && exit 1)
+
+          # Require at least one of the category checkboxes checked: "- [x] aar" etc
+          echo "$BODY" | grep -Eiq '^- \[[xX]\] (aar|lab|net|sec|sys|site|ci|chore)\b' \
+            || (echo "PR body must have ONE checked Category box (e.g., - [x] aar)" && exit 1)

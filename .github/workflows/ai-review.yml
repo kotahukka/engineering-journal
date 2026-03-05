@@ -1,0 +1,164 @@
+name: AI Review (code/config only)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Run on PR events, or on issue_comment when the comment is on a PR and contains /ai review
+    if: >
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' &&
+       contains(github.event.comment.body, '/ai review'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR number for comment-trigger runs
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # For issue_comment, find the PR number associated with the issue (only works if it's a PR)
+          PR_URL=$(gh api repos/${{ github.repository }}/issues/${{ github.event.issue.number }} --jq .pull_request.url || true)
+          if [ -z "$PR_URL" ] || [ "$PR_URL" = "null" ]; then
+            echo "Not a PR comment; skipping."
+            exit 1
+          fi
+          PR_NUMBER=$(echo "$PR_URL" | sed -E 's#.*/pulls/([0-9]+)$#\1#')
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute changed files (PR)
+        id: changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+          echo "PR=$PR_NUMBER"
+
+          gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/files --paginate \
+            --jq '.[].filename' > /tmp/changed_files.txt
+
+          # Keep only code/config targets
+          grep -E '\.(yml|yaml|json|py|sh)$' /tmp/changed_files.txt > /tmp/targets.txt || true
+          grep -E '^(\\.github/|scripts/|mkdocs\\.yml|\\.pre-commit-config\\.yaml)' /tmp/changed_files.txt >> /tmp/targets.txt || true
+
+          # Unique + stable
+          sort -u /tmp/targets.txt > /tmp/targets_uniq.txt || true
+
+          echo "targets_count=$(wc -l < /tmp/targets_uniq.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "Targets:"
+          cat /tmp/targets_uniq.txt || true
+
+      - name: Short-circuit if no relevant files changed
+        if: steps.changes.outputs.targets_count == '0'
+        run: |
+          echo "No code/config changes detected. Skipping AI review."
+
+      - name: Prepare review context
+        if: steps.changes.outputs.targets_count != '0'
+        run: |
+          mkdir -p /tmp/ai_review
+          cp .github/prompts/ai-code-review.md /tmp/ai_review/ai-code-review.md
+          cp .github/prompts/ai-security-review.md /tmp/ai_review/ai-security-review.md
+          cp /tmp/targets_uniq.txt /tmp/ai_review/targets.txt
+
+          # Collect patches for targets (keeps the review bounded)
+          while read -r f; do
+            [ -z "$f" ] && continue
+            if [ -f "$f" ]; then
+              echo "### FILE: $f" >> /tmp/ai_review/patches.txt
+              git diff --unified=3 origin/${{ github.base_ref }}...HEAD -- "$f" >> /tmp/ai_review/patches.txt || true
+              echo "" >> /tmp/ai_review/patches.txt
+            fi
+          done < /tmp/ai_review/targets.txt
+
+      - name: Run AI review (OpenAI)
+        if: steps.changes.outputs.targets_count != '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, subprocess, textwrap, json
+
+          # Minimal dependency-free call using curl.
+          # Uses a single request with both prompts + diff context.
+          api_key = os.environ["OPENAI_API_KEY"]
+
+          with open("/tmp/ai_review/ai-code-review.md","r",encoding="utf-8") as f:
+            code_prompt = f.read().strip()
+          with open("/tmp/ai_review/ai-security-review.md","r",encoding="utf-8") as f:
+            sec_prompt = f.read().strip()
+          with open("/tmp/ai_review/targets.txt","r",encoding="utf-8") as f:
+            targets = f.read().strip()
+          with open("/tmp/ai_review/patches.txt","r",encoding="utf-8",errors="ignore") as f:
+            patches = f.read().strip()
+
+          user_msg = f"""Targets changed (review these only):
+          {targets}
+
+          Diff context:
+          {patches}
+          """
+
+          # NOTE: If you later want a different model, swap "model".
+          payload = {
+            "model": "gpt-5",
+            "input": [
+              {"role":"system","content": "You are a senior engineer and security reviewer."},
+              {"role":"user","content": code_prompt + "\n\n" + sec_prompt + "\n\n" + user_msg}
+            ]
+          }
+
+          cmd = [
+            "curl","-sS","-X","POST","https://api.openai.com/v1/responses",
+            "-H",f"Authorization: Bearer {api_key}",
+            "-H","Content-Type: application/json",
+            "-d",json.dumps(payload)
+          ]
+          out = subprocess.check_output(cmd).decode("utf-8", errors="ignore")
+          data = json.loads(out)
+          text = ""
+          # responses API commonly returns output_text in a top-level convenience field
+          if "output_text" in data:
+            text = data["output_text"]
+          else:
+            # fallback: best-effort extraction
+            text = json.dumps(data)[:6000]
+
+          # Write to file for later posting
+          with open("/tmp/ai_review/result.md","w",encoding="utf-8") as f:
+            f.write(text.strip() + "\n")
+          PY
+
+      - name: Post review comment to PR
+        if: steps.changes.outputs.targets_count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+          BODY_FILE="/tmp/ai_review/result.md"
+
+          # Keep comment size reasonable
+          head -c 60000 "$BODY_FILE" > /tmp/ai_review/result_trim.md
+
+          gh pr comment "$PR_NUMBER" -F /tmp/ai_review/result_trim.md

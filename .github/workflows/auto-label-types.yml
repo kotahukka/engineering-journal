@@ -1,0 +1,87 @@
+script: |
+  const owner = context.repo.owner;
+  const repo = context.repo.repo;
+  const pr = context.payload.pull_request;
+  const prNumber = pr.number;
+
+  const TYPE_TO_LABEL = {
+    docs: "type:docs",
+    ci: "type:ci",
+    chore: "type:chore",
+    feat: "type:feat",
+    fix: "type:fix",
+    refactor: "type:refactor",
+    test: "type:test",
+  };
+
+  // Tie-break priority if commits are mixed
+  const PRIORITY = ["feat", "fix", "docs", "ci", "refactor", "test", "chore"];
+
+  const extractType = (s) => {
+    if (!s) return null;
+    const m = s.trim().match(/^([a-z]+)(\([^)]+\))?(!)?:\s+/i);
+    if (!m) return null;
+    const t = m[1].toLowerCase();
+    return TYPE_TO_LABEL[t] ? t : null;
+  };
+
+  // 1) Prefer PR title type
+  const titleType = extractType(pr.title);
+  let chosenType = titleType;
+
+  // 2) Otherwise derive from commits (majority vote)
+  if (!chosenType) {
+    const commits = await github.paginate(
+      github.rest.pulls.listCommits,
+      { owner, repo, pull_number: prNumber, per_page: 100 }
+    );
+
+    const counts = new Map(); // type -> count
+    for (const c of commits) {
+      const subject = (c.commit?.message ?? "").split("\n")[0];
+      const t = extractType(subject);
+      if (!t) continue;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+
+    if (counts.size > 0) {
+      // Pick highest count; tie-break by PRIORITY
+      const entries = Array.from(counts.entries()); // [type, count]
+      entries.sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1];
+        return PRIORITY.indexOf(a[0]) - PRIORITY.indexOf(b[0]);
+      });
+      chosenType = entries[0][0];
+    }
+  }
+
+  if (!chosenType) {
+    core.info("No type detected from title or commits; skipping.");
+    return;
+  }
+
+  const desiredLabel = TYPE_TO_LABEL[chosenType];
+
+  // Remove ALL existing type:* labels (strict: exactly one)
+  const existing = (pr.labels || []).map(l => l.name);
+  const existingTypeLabels = existing.filter(n => n.startsWith("type:"));
+
+  for (const name of existingTypeLabels) {
+    if (name === desiredLabel) continue;
+    try {
+      await github.rest.issues.removeLabel({ owner, repo, issue_number: prNumber, name });
+    } catch (e) {
+      core.info(`Could not remove ${name}: ${e.message}`);
+    }
+  }
+
+  if (!existing.includes(desiredLabel)) {
+    await github.rest.issues.addLabels({
+      owner, repo,
+      issue_number: prNumber,
+      labels: [desiredLabel]
+    });
+    core.info(`Added: ${desiredLabel}`);
+  } else {
+    core.info(`Type label already present: ${desiredLabel}`);
+  }
