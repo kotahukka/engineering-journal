@@ -1,7 +1,148 @@
 name: AI Review Command
-on: issue_comment
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
 jobs:
-  review:
+  ai_review_command:
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ai review')
     runs-on: ubuntu-latest
     steps:
-      - run: echo 'Manual AI review placeholder'
+      - name: Get PR number
+        id: pr
+        run: |
+          echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+
+      - name: Fetch PR diff
+        id: prdiff
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number("${{ steps.pr.outputs.number }}");
+            const { owner, repo } = context.repo;
+
+            const res = await github.request(
+              'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+              { owner, repo, pull_number: prNumber, mediaType: { format: 'diff' } }
+            );
+
+            let diff = res.data || "";
+            const maxChars = 120000;
+            if (diff.length > maxChars) diff = diff.slice(0, maxChars) + "\n\n[TRUNCATED]\n";
+            core.setOutput("diff", diff);
+
+      - name: Secret sniff (soft block; ignore 'redacted')
+        id: secrets
+        env:
+          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
+        run: |
+          set -euo pipefail
+
+          # Keep only added lines, ignore diff headers (+++)
+          added="$(printf '%s\n' "$PR_DIFF" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+
+          # Patterns: common real-world tokens + some generic "looks like a secret" assignments.
+          # Intentionally conservative: we only hard-fail when it *really* looks like a secret.
+          patterns=(
+            'AKIA[0-9A-Z]{16}'                            # AWS Access Key ID
+            'ASIA[0-9A-Z]{16}'                            # AWS STS Access Key ID
+            'ghp_[A-Za-z0-9]{30,}'                        # GitHub classic PAT
+            'github_pat_[A-Za-z0-9_]{30,}'                # GitHub fine-grained PAT
+            'glpat-[A-Za-z0-9_\-]{20,}'                   # GitLab PAT
+            'xox[baprs]-[A-Za-z0-9-]{10,}'                # Slack token-ish
+            'AIzaSy[A-Za-z0-9_\-]{30,}'                   # Google API key pattern
+            'sk-[A-Za-z0-9]{20,}'                         # OpenAI-style key pattern (generic)
+            '-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----'
+            '(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["'"'"']?[A-Za-z0-9_\-\/\+=]{16,}["'"'"']?'  # generic assignment
+          )
+
+          hits=""
+          for p in "${patterns[@]}"; do
+            # grep -P for PCRE support (ubuntu has it)
+            m="$(printf '%s\n' "$added" | grep -P -n "$p" || true)"
+            if [ -n "$m" ]; then
+              hits="${hits}\n${m}"
+            fi
+          done
+
+          # Remove anything containing "redacted" (case-insensitive)
+          filtered="$(printf '%b\n' "$hits" | sed '/^$/d' | grep -vi 'redacted' || true)"
+
+          if [ -n "$filtered" ]; then
+            {
+              echo "## Summary"
+              echo "- ❌ Potential secret detected in added lines. Please remove and rotate if necessary."
+              echo
+              echo "## High priority"
+              echo "- [HIGH] Potential secret-like material found (filtered to exclude lines containing 'redacted')."
+              echo
+              echo "### Evidence (line numbers refer to diff-added-lines stream)"
+              echo '```'
+              printf '%s\n' "$filtered"
+              echo '```'
+              echo
+              echo "## Suggested fix"
+              echo "- Remove the secret from the PR, store it in GitHub Secrets or your secret manager, and re-run."
+              echo "- If this was a real secret, rotate it immediately."
+            } > review.md
+
+            exit 1
+          fi
+
+          # No secret hits: create an empty marker file for downstream steps (optional)
+          echo "no_secrets=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run OpenAI review (diff-only; soft block on [HIGH])
+        id: openai
+        if: always()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5
+          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
+        run: |
+          set -euo pipefail
+
+          # If review.md already exists from secret sniff failure, keep it and skip OpenAI output overwrite.
+          if [ -f review.md ]; then
+            echo "review.md already created by secret sniff; skipping OpenAI write."
+            exit 0
+          fi
+
+          python3 .github/scripts/openai_review.py > review.md
+
+          # Soft-block only if model flags [HIGH]
+          if grep -q '\[HIGH\]' review.md; then
+            exit 1
+          fi
+
+      - name: Comment review on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const prNumber = Number("${{ steps.pr.outputs.number }}");
+            const { owner, repo } = context.repo;
+
+            let body = "## Summary\n- No review output.";
+            try { body = fs.readFileSync('review.md','utf8').trim() || body; } catch(e) {}
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prNumber, body
+            });
+
+      - name: Fail job if secret sniff or OpenAI produced [HIGH]
+        if: always()
+        run: |
+          # If either prior step failed, the job is already in a failed state,
+          # but because we used always() for commenting, we re-emit failure here.
+          # GitHub Actions will treat this as failed if any previous step failed.
+          echo "Done."
