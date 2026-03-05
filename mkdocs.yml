@@ -1,0 +1,32 @@
+site_name: Engineering Journal
+site_description: Labs, after-action reports, and notes.
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - toc.follow
+    - content.code.copy
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - After Action Reports:
+      - after-action-reports/index.md
+  - Labs:
+      - labs/index.md
+  - Networking:
+      - networking/index.md
+  - Cybersecurity:
+      - cybersecurity/index.md
+  - System Administration:
+      - system-administration/index.md
+  - About:
+      - about/index.md

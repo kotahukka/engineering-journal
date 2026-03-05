@@ -1,0 +1,16 @@
+name: Require Linked Issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure PR links an issue
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          echo "$BODY" | grep -Eiq '(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#([0-9]+)' \
+            || (echo "PR must reference an issue using: Closes #123" && exit 1)

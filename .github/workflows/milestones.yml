@@ -1,0 +1,33 @@
+name: Ensure Half-Year Milestone
+
+on:
+  schedule:
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  ensure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Create milestone if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          YEAR=$(date +%Y)
+          MONTH=$(date +%m)
+          if [ "$MONTH" -le 6 ]; then HALF="H1"; else HALF="H2"; fi
+          TITLE="${YEAR}-${HALF}"
+
+          gh api "repos/${{ github.repository }}/milestones" --paginate \
+            | jq -r '.[].title' | grep -qx "$TITLE" && exit 0
+
+          gh api -X POST "repos/${{ github.repository }}/milestones" \
+            -f title="$TITLE" \
+            -f description="Work tracked for ${TITLE} in engineering-journal."
