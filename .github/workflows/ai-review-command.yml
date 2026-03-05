@@ -21,45 +21,109 @@ jobs:
         run: |
           echo "number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
 
-      - name: Fetch PR diff
-        id: prdiff
+      - name: Build review bundle (changed files, filtered)
+        id: bundle
         uses: actions/github-script@v7
         with:
           script: |
             const prNumber = Number("${{ steps.pr.outputs.number }}");
             const { owner, repo } = context.repo;
 
-            const res = await github.request(
-              'GET /repos/{owner}/{repo}/pulls/{pull_number}',
-              { owner, repo, pull_number: prNumber, mediaType: { format: 'diff' } }
-            );
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
 
-            let diff = res.data || "";
-            const maxChars = 120000;
-            if (diff.length > maxChars) diff = diff.slice(0, maxChars) + "\n\n[TRUNCATED]\n";
-            core.setOutput("diff", diff);
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: prNumber, per_page: 100
+            });
+
+            const allow = (p) => {
+              if (p.startsWith(".github/")) return true;
+              if (p.startsWith("templates/")) return true;
+
+              const rootAllow = new Set([
+                "mkdocs.yml",
+                ".pre-commit-config.yaml",
+                ".markdownlint.json",
+                ".markdownlintignore",
+                ".yamllint",
+                "yamllint.yml",
+                "yamllint.yaml",
+                "CODEOWNERS",
+                "LICENSE",
+                "CONTRIBUTING.md",
+                "SECURITY.md",
+                "STYLE_GUIDE.md",
+                "CHANGELOG.md",
+                "CITATION.cff"
+              ]);
+              if (rootAllow.has(p)) return true;
+
+              if (!p.endsWith(".md")) return true;
+              return false;
+            };
+
+            const deny = (p) => {
+              if (p.startsWith("docs/")) return true;
+              if (p.startsWith("after-action-reports/")) return true;
+              if (p.startsWith("labs/")) return true;
+              if (p.startsWith("networking/")) return true;
+              if (p.startsWith("cybersecurity/")) return true;
+              if (p.startsWith("system-administration/")) return true;
+              return false;
+            };
+
+            const included = files.filter(f => allow(f.filename) && !deny(f.filename));
+
+            const header = [
+              `PR #${prNumber}: ${pr.data.title}`,
+              `Included files: ${included.length} / ${files.length}`,
+              `Note: patches may be missing for large/binary files.`
+            ].join("\n");
+
+            let reviewText = header + "\n\n";
+            let addedLines = "";
+
+            for (const f of included) {
+              reviewText += `\n---\n### ${f.filename}\n`;
+              reviewText += `- status: ${f.status}\n`;
+              reviewText += `- additions: ${f.additions}, deletions: ${f.deletions}\n\n`;
+
+              if (typeof f.patch === "string" && f.patch.length > 0) {
+                reviewText += "```diff\n" + f.patch + "\n```\n";
+                const patchLines = f.patch.split("\n");
+                for (const line of patchLines) {
+                  if (line.startsWith("+") && !line.startsWith("+++")) {
+                    addedLines += line + "\n";
+                  }
+                }
+              } else {
+                reviewText += "_Patch not available (binary or too large)._ \n";
+              }
+            }
+
+            const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
+            core.setOutput("review_b64", b64(reviewText));
+            core.setOutput("added_b64", b64(addedLines));
+
+      - name: Decode bundle
+        run: |
+          echo "${{ steps.bundle.outputs.review_b64 }}" | base64 -d > review_input.txt || true
+          echo "${{ steps.bundle.outputs.added_b64 }}"  | base64 -d > added_lines.txt || true
 
       - name: Secret sniff (precise; ignore 'redacted')
-        id: secrets
-        env:
-          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
         run: |
           set -euo pipefail
+          added="$(cat added_lines.txt 2>/dev/null || true)"
 
-          # Only added lines; ignore diff headers.
-          added="$(printf '%s\n' "$PR_DIFF" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
-
-          # High-confidence patterns only (reduced false positives)
           patterns=(
-            'AKIA[0-9A-Z]{16}'                      # AWS Access Key ID
-            'ASIA[0-9A-Z]{16}'                      # AWS STS Access Key ID
-            'ghp_[A-Za-z0-9]{36}'                   # GitHub classic PAT (fixed length)
-            'github_pat_[A-Za-z0-9_]{20,}'          # GitHub fine-grained PAT (variable)
-            'glpat-[A-Za-z0-9_\-]{20,}'             # GitLab PAT
-            'xox[baprs]-[A-Za-z0-9-]{10,}'          # Slack token-ish
-            'AIzaSy[A-Za-z0-9_\-]{33}'              # Google API key (fixed-ish)
-            'sk_live_[A-Za-z0-9]{20,}'              # Stripe secret live key
-            'rk_live_[A-Za-z0-9]{20,}'              # Stripe restricted live key
+            'AKIA[0-9A-Z]{16}'
+            'ASIA[0-9A-Z]{16}'
+            'ghp_[A-Za-z0-9]{36}'
+            'github_pat_[A-Za-z0-9_]{20,}'
+            'glpat-[A-Za-z0-9_\-]{20,}'
+            'xox[baprs]-[A-Za-z0-9-]{10,}'
+            'AIzaSy[A-Za-z0-9_\-]{33}'
+            'sk_live_[A-Za-z0-9]{20,}'
+            'rk_live_[A-Za-z0-9]{20,}'
             '-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----'
           )
 
@@ -71,13 +135,12 @@ jobs:
             fi
           done
 
-          # Ignore anything containing "redacted" (case-insensitive)
           filtered="$(printf '%b\n' "$hits" | sed '/^$/d' | grep -vi 'redacted' || true)"
 
           if [ -n "$filtered" ]; then
             {
               echo "## Summary"
-              echo "- ❌ Potential secret detected in added lines. Remove it and rotate if real."
+              echo "- ❌ Potential secret detected in added lines (filtered bundle)."
               echo
               echo "## High priority"
               echo "- [HIGH] High-confidence secret-like token/key material detected (excluding lines containing 'redacted')."
@@ -94,24 +157,25 @@ jobs:
             exit 1
           fi
 
-      - name: Run OpenAI review (diff-only; soft block on [HIGH])
+      - name: Run OpenAI review (filtered bundle; soft block on [HIGH])
         if: always()
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-5
-          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
+          REVIEW_TEXT_B64: ${{ steps.bundle.outputs.review_b64 }}
         run: |
           set -euo pipefail
 
-          # If review.md already exists from secret sniff failure, don't overwrite it.
           if [ -f review.md ]; then
-            echo "review.md created by secret sniff; skipping OpenAI write."
+            echo "review.md created by secret sniff; skipping OpenAI."
             exit 0
           fi
 
+          echo "$REVIEW_TEXT_B64" | base64 -d > review_input.txt
+          export REVIEW_TEXT="$(cat review_input.txt)"
+
           python3 .github/scripts/openai_review.py > review.md
 
-          # Soft-block only if model flags [HIGH]
           if grep -q '\[HIGH\]' review.md; then
             exit 1
           fi
