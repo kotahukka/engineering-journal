@@ -1,0 +1,16 @@
+name: markdownlint
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm i -g markdownlint-cli@0.41.0
+      - run: markdownlint --config .markdownlint.json --ignore-path .markdownlintignore "**/*.md"
