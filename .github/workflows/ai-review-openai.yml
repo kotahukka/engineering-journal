@@ -1,0 +1,7 @@
+name: AI Review
+on: pull_request
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'AI review placeholder'

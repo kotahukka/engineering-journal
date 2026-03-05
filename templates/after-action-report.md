@@ -1,11 +1,13 @@
-# After Action Report: <Title>
+# After Action Report
 
 ## Objective
+
 What was the goal?
 
 ---
 
 ## Environment
+
 OS:
 Network:
 Tools:

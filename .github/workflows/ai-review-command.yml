@@ -1,0 +1,7 @@
+name: AI Review Command
+on: issue_comment
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Manual AI review placeholder'
