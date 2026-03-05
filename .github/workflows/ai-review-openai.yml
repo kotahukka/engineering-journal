@@ -1,7 +1,126 @@
-name: AI Review
-on: pull_request
+name: AI Review (OpenAI)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
-  review:
+  ai_review:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+
     steps:
-      - run: echo 'AI review placeholder'
+      - name: Fetch PR diff
+        id: prdiff
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+
+            const res = await github.request(
+              'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+              { owner, repo, pull_number: pr.number, mediaType: { format: 'diff' } }
+            );
+
+            let diff = res.data || "";
+            const maxChars = 120000;
+            if (diff.length > maxChars) diff = diff.slice(0, maxChars) + "\n\n[TRUNCATED]\n";
+            core.setOutput("diff", diff);
+
+      - name: Secret sniff (precise; ignore 'redacted')
+        id: secrets
+        env:
+          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
+        run: |
+          set -euo pipefail
+
+          # Only added lines; ignore diff headers.
+          added="$(printf '%s\n' "$PR_DIFF" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+
+          # High-confidence patterns only (reduced false positives)
+          patterns=(
+            'AKIA[0-9A-Z]{16}'                      # AWS Access Key ID
+            'ASIA[0-9A-Z]{16}'                      # AWS STS Access Key ID
+            'ghp_[A-Za-z0-9]{36}'                   # GitHub classic PAT (fixed length)
+            'github_pat_[A-Za-z0-9_]{20,}'          # GitHub fine-grained PAT (variable)
+            'glpat-[A-Za-z0-9_\-]{20,}'             # GitLab PAT
+            'xox[baprs]-[A-Za-z0-9-]{10,}'          # Slack token-ish
+            'AIzaSy[A-Za-z0-9_\-]{33}'              # Google API key (fixed-ish)
+            'sk_live_[A-Za-z0-9]{20,}'              # Stripe secret live key
+            'rk_live_[A-Za-z0-9]{20,}'              # Stripe restricted live key
+            '-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----'
+          )
+
+          hits=""
+          for p in "${patterns[@]}"; do
+            m="$(printf '%s\n' "$added" | grep -P -n "$p" || true)"
+            if [ -n "$m" ]; then
+              hits="${hits}\n${m}"
+            fi
+          done
+
+          # Ignore anything containing "redacted" (case-insensitive)
+          filtered="$(printf '%b\n' "$hits" | sed '/^$/d' | grep -vi 'redacted' || true)"
+
+          if [ -n "$filtered" ]; then
+            {
+              echo "## Summary"
+              echo "- ❌ Potential secret detected in added lines. Remove it and rotate if real."
+              echo
+              echo "## High priority"
+              echo "- [HIGH] High-confidence secret-like token/key material detected (excluding lines containing 'redacted')."
+              echo
+              echo "### Evidence (line numbers refer to added-lines stream)"
+              echo '```'
+              printf '%s\n' "$filtered"
+              echo '```'
+              echo
+              echo "## Recommended fix"
+              echo "- Remove from the PR, store in GitHub Secrets, and re-run."
+              echo "- If real, rotate/revoke immediately."
+            } > review.md
+            exit 1
+          fi
+
+      - name: Run OpenAI review (diff-only; soft block on [HIGH])
+        if: always()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5
+          PR_DIFF: ${{ steps.prdiff.outputs.diff }}
+        run: |
+          set -euo pipefail
+
+          # If review.md already exists from secret sniff failure, don't overwrite it.
+          if [ -f review.md ]; then
+            echo "review.md created by secret sniff; skipping OpenAI write."
+            exit 0
+          fi
+
+          python3 .github/scripts/openai_review.py > review.md
+
+          # Soft-block only if model flags [HIGH]
+          if grep -q '\[HIGH\]' review.md; then
+            exit 1
+          fi
+
+      - name: Comment review on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+
+            let body = "## Summary\n- No review output.";
+            try { body = fs.readFileSync('review.md','utf8').trim() || body; } catch(e) {}
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr.number, body
+            });
