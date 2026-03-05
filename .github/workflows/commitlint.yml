@@ -3,16 +3,31 @@ name: Commitlint
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # <-- important: get full history
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - run: npm install --save-dev @commitlint/{cli,config-conventional}
+
       - run: |
           echo "module.exports = {extends: ['@commitlint/config-conventional']};" > commitlint.config.cjs
-      - run: npx commitlint --from=HEAD~1 --to=HEAD
+
+      - name: Lint commit messages
+        run: |
+          # If HEAD~1 doesn't exist (first commit / shallow history), lint just HEAD.
+          if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            npx commitlint --from=HEAD~1 --to=HEAD
+          else
+            npx commitlint --from=HEAD --to=HEAD
+          fi
