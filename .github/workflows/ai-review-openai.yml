@@ -1,3 +1,4 @@
+---
 name: AI Review (OpenAI)
 
 on:
@@ -101,6 +102,11 @@ jobs:
             const b64 = (s) => Buffer.from(s, "utf8").toString("base64");
             core.setOutput("review_b64", b64(reviewText));
             core.setOutput("added_b64", b64(addedLines));
+
+      - name: Checkout base (safe)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Decode bundle
         id: decode

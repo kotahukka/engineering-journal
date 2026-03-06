@@ -1,0 +1,41 @@
+---
+name: Commitlint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install --save-dev @commitlint/{cli,config-conventional}
+
+      - name: Write commitlint config
+        run: |
+          cat > commitlint.config.cjs <<'EOF'
+          module.exports = {
+            extends: ['@commitlint/config-conventional'],
+            rules: {
+              'type-enum': [2, 'always', ['docs', 'ci', 'chore', 'feat', 'fix', 'refactor', 'test', 'build', 'perf', 'revert']],
+              'scope-enum': [2, 'always', ['aar', 'lab', 'net', 'sec', 'sys', 'site', 'readme', 'ci', 'repo']],
+              'subject-case': [0],
+            },
+          };
+          EOF
+
+      - name: Lint all commits in the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Linting commits from $BASE_SHA..$HEAD_SHA"
+          npx commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
