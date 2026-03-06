@@ -115,6 +115,30 @@ jobs:
             const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
             core.setOutput("base_sha", pr.data.base.sha);
 
+      - name: Download reviewer script + prompts from PR head
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+
+            async function getFile(path) {
+              const res = await github.rest.repos.getContent({
+                owner, repo, path, ref: pr.head.sha
+              });
+              if (Array.isArray(res.data)) throw new Error(`Expected file, got directory: ${path}`);
+              const content = Buffer.from(res.data.content, res.data.encoding).toString("utf8");
+              return content;
+            }
+
+            const fs = require("fs");
+            fs.mkdirSync(".github/scripts", { recursive: true });
+            fs.mkdirSync(".github/prompts", { recursive: true });
+
+            fs.writeFileSync(".github/scripts/openai_review.py", await getFile(".github/scripts/openai_review.py"), "utf8");
+            fs.writeFileSync(".github/prompts/openai_review.md", await getFile(".github/prompts/openai_review.md"), "utf8");
+            fs.writeFileSync(".github/prompts/openai_review_security.md", await getFile(".github/prompts/openai_review_security.md"), "utf8");
+
       - name: Checkout base (safe)
         uses: actions/checkout@v4
         with:
